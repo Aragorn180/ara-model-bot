@@ -1,13 +1,21 @@
 # Bot Ara's Model 🧪
 
-Scan GBPUSD / EURUSD / DXY sur GitHub Actions (indépendant du Mac) et message Telegram quand l'Ara's Model apparaît :
+Scan GBPUSD / EURUSD / DXY / BTCUSDT sur GitHub Actions (indépendant du Mac) et message Telegram dès que l'Ara's Model apparaît :
 
-- **C0** = bloc H4 qui vient de fermer (grille NY 1/5/9/13/17/21 h)
-- **Q1** (1re H1 du bloc suivant) prend le high ou le low de C0
+- **C0** = bougie H4 qui vient de fermer
+- **Q1** (1re H1 de la bougie H4 suivante) prend le high ou le low de C0
 - **Q2** fait turtle soup de Q1 (mèche au-delà de Q1, clôture revenue en deçà)
 - → entrée à l'open de **Q3**
 
-Le message part pendant Q3 (en général 5 à 15 min après l'open, selon le retard du planificateur GitHub).
+Les bougies sont celles des charts TradingView (heure NY) :
+
+| Chart TV | Bougies H4 | Données du bot |
+|---|---|---|
+| ICMARKETS:GBPUSD / EURUSD | 17h01, 21h01, 1h01… (H1 à hh:01) | M1 Dukascopy agrégé avec 1 min de décalage |
+| TVC:DXY | 19/23/3/7/11/15 h du mardi au vendredi, 17/21/1/5/9/13 h le lundi | DXY recalculé (formule ICE) depuis le M1 des 6 paires |
+| BINANCE:BTCUSDT | 0/4/8/12/16/20 h UTC | klines Binance |
+
+Le run démarre à :59, attend la clôture de Q2, réclame la bougie jusqu'à ce qu'elle soit servie (~15 s) et envoie. Si GitHub démarre le run en retard, le message dit de combien de minutes.
 
 ## Commandes
 
@@ -16,4 +24,4 @@ Le message part pendant Q3 (en général 5 à 15 min après l'open, selon le ret
 
 Secrets du repo : `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
 
-Même règle que `~/tv-700s-mac/pine/ara_model.pine` et `~/tv-700s-mac/src/tv_700s_mac/watcher/ara_alert.py`.
+Même règle que l'indicateur `~/tv-700s-mac/pine/ara_model.pine`.
