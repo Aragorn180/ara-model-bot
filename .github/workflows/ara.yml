@@ -2,17 +2,16 @@ name: Ara's Model scan
 
 on:
   schedule:
-    # Un tir à :59, une minute avant chaque clôture de Q2 (hh:00 pour DXY et
-    # BTC, hh:01 pour GU / EU chez IC Markets). Le script attend la clôture puis
-    # la bougie, et envoie. Heures UTC générées depuis is_q2_close() pour
-    # l'heure d'été ET l'heure d'hiver : le tir de la mauvaise saison sort tout
-    # de suite. Si GitHub démarre le run en retard, il scanne quand même et le
-    # message dit de combien de minutes.
-    - cron: "59 1,5,9,13,17,21,22,23 * * 0"
-    - cron: "59 0,1,2,3,5,6,7,9,10,11,13,14,15,17,18,19,21,22,23 * * 1"
-    - cron: "59 * * * 2-4"
-    - cron: "59 0-21 * * 5"
-    - cron: "59 1,5,9,13,17,21 * * 6"
+    # Un tir à :45, un quart d'heure avant chaque clôture de Q2 (hh:00 pour DXY
+    # et BTC, hh:01 pour GU / EU chez IC Markets) : le planificateur GitHub
+    # démarre souvent en retard, la marge l'absorbe. Le script attend la clôture
+    # puis la bougie, et envoie. Heures UTC générées depuis is_q2_close() pour
+    # l'heure d'été ET l'heure d'hiver. Repo public = minutes Actions gratuites.
+    - cron: "45 1,5,9,13,17,21,22,23 * * 0"
+    - cron: "45 0,1,2,3,5,6,7,9,10,11,13,14,15,17,18,19,21,22,23 * * 1"
+    - cron: "45 * * * 2-4"
+    - cron: "45 0-21 * * 5"
+    - cron: "45 1,5,9,13,17,21 * * 6"
   workflow_dispatch:
     inputs:
       mode:
@@ -28,9 +27,25 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    permissions:
+      contents: write          # commit de keepalive
     steps:
       - uses: actions/checkout@v4
+
+      # GitHub désactive les crons d'un repo public après 60 jours sans
+      # activité : un commit automatique si le dernier date de plus de 30 jours.
+      - name: Garder le cron actif
+        if: github.event_name == 'schedule'
+        run: |
+          if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt 2592000 ]; then
+            date -u +%F > .github/keepalive
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/keepalive
+            git commit -m "keepalive : garde le cron actif"
+            git push
+          fi
 
       - uses: actions/setup-python@v5
         with:
@@ -50,7 +65,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          ARA_MAX_LEAD_MIN: "15"
+          ARA_MAX_LEAD_MIN: "20"     # :45 → clôture forex à hh:01 = 16 min d'avance
         run: |
           if [ "${{ inputs.mode }}" = "test" ]; then
             python ara_bot.py --test

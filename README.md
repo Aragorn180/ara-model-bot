@@ -15,7 +15,7 @@ Les bougies sont celles des charts TradingView (heure NY) :
 | TVC:DXY | 19/23/3/7/11/15 h du mardi au vendredi, 17/21/1/5/9/13 h le lundi | DXY recalculé (formule ICE) depuis le M1 des 6 paires |
 | BINANCE:BTCUSDT | 0/4/8/12/16/20 h UTC | klines Binance |
 
-Le run démarre à :59, attend la clôture de Q2, réclame la bougie jusqu'à ce qu'elle soit servie (~15 s) et envoie. Si GitHub démarre le run en retard, le message dit de combien de minutes.
+Le run démarre à :45, attend la clôture de Q2, réclame la bougie jusqu'à ce qu'elle soit servie (~15 s) et envoie. Les 15 min de marge absorbent les retards du planificateur GitHub ; si le run démarre quand même après la clôture, le message dit de combien de minutes. Un commit `keepalive` mensuel empêche GitHub de couper le cron (repo public inactif 60 jours).
 
 ## Commandes
 
