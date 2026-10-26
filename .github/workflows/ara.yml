@@ -1,0 +1,59 @@
+name: Ara's Model scan
+
+on:
+  schedule:
+    # Q3 = 3/7/11/15/19/23 h NY, soit 7/11/15/19/23/3 h UTC en heure d'été (EDT)
+    # et 8/12/16/20/0/4 h UTC en heure d'hiver (EST) : on couvre les deux.
+    # Trois tirs par heure de Q3 : le planificateur GitHub retarde ou saute
+    # parfois un run, state/seen.json évite le doublon. Dimanche → vendredi UTC.
+    - cron: "4,19,34 0,3,4,7,8,11,12,15,16,19,20,23 * * 0-5"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "scan = run normal, test = message de test Telegram"
+        type: choice
+        options: [scan, test]
+        default: scan
+
+concurrency:
+  group: ara-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Restaurer l'anti-doublon
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: ara-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ara-state-
+
+      - name: Scan
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ "${{ inputs.mode }}" = "test" ]; then
+            python ara_bot.py --test
+          else
+            python ara_bot.py
+          fi
+
+      - name: Sauver l'anti-doublon
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: ara-state-${{ github.run_id }}-${{ github.run_attempt }}

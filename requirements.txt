@@ -1,0 +1,2 @@
+dukascopy-python==4.0.1
+pandas==3.0.3
