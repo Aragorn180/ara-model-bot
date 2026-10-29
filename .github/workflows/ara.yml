@@ -2,23 +2,22 @@ name: Ara's Model scan
 
 on:
   schedule:
-    # Un tir à :45, un quart d'heure avant chaque clôture de Q2 (hh:00 pour DXY
-    # et BTC, hh:01 pour GU / EU chez IC Markets) : le planificateur GitHub
-    # démarre souvent en retard, la marge l'absorbe. Le script attend la clôture
-    # puis la bougie, et envoie. Heures UTC générées depuis is_q2_close() pour
-    # l'heure d'été ET l'heure d'hiver. Repo public = minutes Actions gratuites.
-    - cron: "45 1,5,9,13,17,21,22,23 * * 0"
-    - cron: "45 0,1,2,3,5,6,7,9,10,11,13,14,15,17,18,19,21,22,23 * * 1"
-    - cron: "45 * * * 2-4"
-    - cron: "45 0-21 * * 5"
-    - cron: "45 1,5,9,13,17,21 * * 6"
+    # Filet seulement : relance le veilleur si la chaîne a cassé. Le scheduler
+    # GitHub saute ou retarde la plupart des tirs (26-29/10 : un run toutes les
+    # 4 à 6 h, 10 à 50 min de retard) : c'est le veilleur qui tient l'heure.
+    # Un tir qui tombe pendant qu'un veilleur tourne attend dans la file, puis
+    # le relais suivant le remplace (un seul run en attente par groupe).
+    - cron: "17 */2 * * *"
   workflow_dispatch:
     inputs:
       mode:
-        description: "scan = run normal, test = message de test Telegram"
+        description: "watch = veilleur (normal), scan = un scan, test = message de test Telegram"
         type: choice
-        options: [scan, test]
-        default: scan
+        options: [watch, scan, test]
+        default: watch
+      minutes:
+        description: "durée du veilleur en minutes (test : plus court)"
+        default: "330"
 
 concurrency:
   group: ara-scan
@@ -27,16 +26,16 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 355       # job GitHub : 6 h max ; veilleur 330 min + dernière clôture
     permissions:
       contents: write          # commit de keepalive
+      actions: write           # relance du veilleur suivant
     steps:
       - uses: actions/checkout@v4
 
       # GitHub désactive les crons d'un repo public après 60 jours sans
       # activité : un commit automatique si le dernier date de plus de 30 jours.
       - name: Garder le cron actif
-        if: github.event_name == 'schedule'
         run: |
           if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt 2592000 ]; then
             date -u +%F > .github/keepalive
@@ -61,17 +60,20 @@ jobs:
           key: ara-state-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: ara-state-
 
-      - name: Scan
+      - name: Bot
+        id: bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          ARA_MAX_LEAD_MIN: "20"     # :45 → clôture forex à hh:01 = 16 min d'avance
+          ARA_MAX_LEAD_MIN: "20"
+          ARA_WATCH_MAX_MIN: ${{ inputs.minutes || '330' }}
         run: |
-          if [ "${{ inputs.mode }}" = "test" ]; then
-            python ara_bot.py --test
-          else
-            python ara_bot.py
-          fi
+          echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
+          case "${{ inputs.mode || 'watch' }}" in
+            test) python ara_bot.py --test ;;
+            scan) python ara_bot.py ;;
+            *)    python ara_bot.py --watch ;;
+          esac
 
       - name: Sauver l'anti-doublon
         if: always()
@@ -79,3 +81,24 @@ jobs:
         with:
           path: state
           key: ara-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Relais : le veilleur suivant part dès que celui-ci se termine (la file
+      # de concurrence le retient jusque-là). Pas de relance après un échec
+      # rapide, pour ne pas boucler : le cron de filet réessaiera.
+      - name: Relancer le veilleur
+        if: always() && (inputs.mode || 'watch') == 'watch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          start="${{ steps.bot.outputs.start }}"
+          if [ -z "$start" ]; then
+            echo "le bot n'a pas démarré : pas de relance, le cron de filet réessaiera"
+            exit 0
+          fi
+          elapsed=$(( $(date +%s) - start ))
+          if [ "${{ steps.bot.outcome }}" != "success" ] && [ "$elapsed" -lt 600 ]; then
+            echo "échec après ${elapsed}s : pas de relance, le cron de filet réessaiera"
+            exit 0
+          fi
+          gh workflow run ara.yml --repo "$GITHUB_REPOSITORY" -f mode=watch
+          echo "veilleur suivant lancé"

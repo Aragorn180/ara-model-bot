@@ -14,17 +14,19 @@ d'Antoine, 2026-10-26) : TV les cale sur la session du symbole, qui diffère
 d'un actif à l'autre — voir SESSIONS.
 
 Tourne sur GitHub Actions (`.github/workflows/ara.yml`), indépendant du Mac.
-Antoine veut le message DÈS la clôture de Q2 : le run démarre juste avant (ou
-juste après) la clôture, le script réclame la H1 de Q2 jusqu'à ce qu'elle soit
-servie (Dukascopy : ~15 s après la clôture, mesuré le 2026-10-26) puis envoie.
-Un run de secours repasse pendant Q3. Un setup n'est signalé que tant que Q3
-est ouverte ; `state/seen.json` (conservé par actions/cache) évite le doublon.
+Antoine veut le message DÈS la clôture de Q2. Le cron GitHub ne tient pas la
+cadence (26-29/10 : un tir toutes les 4 à 6 h, 10 à 50 min de retard), d'où le
+mode veilleur (`--watch`) : un run reste éveillé ~5 h 30, se réveille 1 min
+avant chaque clôture de Q2, réclame la H1 de Q2 jusqu'à ce qu'elle soit servie
+(Dukascopy : ~15 s après la clôture), envoie, puis le workflow relance le
+veilleur suivant. Un setup n'est signalé que tant que Q3 est ouverte ;
+`state/seen.json` (conservé par actions/cache) évite le doublon.
 
-Même règle que `~/tv-700s-mac/pine/ara_model.pine` et
-`~/tv-700s-mac/src/tv_700s_mac/watcher/ara_alert.py` : les garder alignés.
+Même règle que `~/tv-700s-mac/pine/ara_model.pine` : les garder alignés.
 
 Usage :
-    python ara_bot.py                 # scan + Telegram (le run du cron)
+    python ara_bot.py --watch         # veilleur (le run normal du workflow)
+    python ara_bot.py                 # un scan + Telegram
     python ara_bot.py --dry-run       # affiche, n'envoie rien
     python ara_bot.py --history 30    # liste les setups des 30 derniers jours
     python ara_bot.py --test          # message de test sur Telegram
@@ -104,6 +106,9 @@ MAX_LEAD = timedelta(minutes=int(os.environ.get("ARA_MAX_LEAD_MIN", "15")))
 # POLL_MAX au plus ; au-delà, le run de secours de Q3 prend le relais.
 POLL_S = 10
 POLL_MAX = timedelta(minutes=10)
+# Durée d'un veilleur : sous la limite de 6 h d'un job GitHub, marge comprise
+# pour finir la dernière clôture (POLL_MAX) et passer le relais.
+WATCH_MAX = timedelta(minutes=int(os.environ.get("ARA_WATCH_MAX_MIN", "330")))
 
 
 def log(msg: str) -> None:
@@ -527,6 +532,49 @@ def scan(dry_run: bool = False) -> int:
     return 1 if symbols and errors >= len(symbols) else 0
 
 
+def next_q2_close(now: datetime) -> pd.Timestamp | None:
+    """Prochaine clôture de Q2, tous symboles confondus, strictement après `now`."""
+    now = pd.Timestamp(now)
+    hour = now.floor("h")
+    best = None
+    for cfg in SYMBOLS.values():
+        kind = cfg["session"]
+        for k in range(9):                      # BTC clôt une Q2 toutes les 4 h
+            t = hour + k * H1 + timedelta(minutes=SESSION_MINUTE[kind])
+            if t > now and is_q2_close(kind, t):
+                best = t if best is None else min(best, t)
+                break
+    return best
+
+
+def watch(dry_run: bool = False) -> int:
+    """Veilleur : un scan de rattrapage, puis un scan à chaque clôture de Q2
+    jusqu'à WATCH_MAX. Rend la main juste après une clôture, quand la suivante
+    tombe après la fin : le veilleur suivant a alors ~1 h pour démarrer."""
+    deadline = datetime.now(timezone.utc) + WATCH_MAX
+    log(f"veilleur jusqu'à {deadline:%d/%m %H:%M}Z")
+    rc = 0
+    t = None                                    # clôture visée (None = rattrapage au démarrage)
+    while True:
+        try:
+            rc = scan(dry_run)
+        except Exception as e:                  # un scan raté ne tue pas le veilleur
+            log(f"scan KO : {type(e).__name__}: {str(e)[:200]}")
+            rc = 1
+        now = datetime.now(timezone.utc)
+        if t is not None and now < t:           # jamais deux scans pour la même clôture
+            time.sleep((t - now).total_seconds() + 1)
+            now = datetime.now(timezone.utc)
+        t = next_q2_close(now)
+        if t is None or t > deadline:
+            log(f"prochaine clôture de Q2 {t:%d/%m %H:%M}Z après la fin — relais au veilleur suivant"
+                if t is not None else "aucune clôture de Q2 en vue — relais")
+            return rc
+        wake = t - timedelta(minutes=1)
+        if wake > now:
+            time.sleep((wake - now).total_seconds())
+
+
 def history(days: int) -> None:
     now = datetime.now(timezone.utc)
     for sym, cfg in SYMBOLS.items():
@@ -556,12 +604,15 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--history", type=int, metavar="JOURS")
     ap.add_argument("--test", action="store_true")
+    ap.add_argument("--watch", action="store_true", help="veilleur jusqu'à ARA_WATCH_MAX_MIN")
     args = ap.parse_args()
     if args.history:
         history(args.history)
         return 0
     if args.test:
         return test_message()
+    if args.watch:
+        return watch(dry_run=args.dry_run)
     return scan(dry_run=args.dry_run)
 
 
